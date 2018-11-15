@@ -19,20 +19,21 @@ seed = 42
 random.seed = seed
 np.random.seed = seed
 
+# Set some parameters
 IMG_WIDTH = 128
 IMG_HEIGHT = 128
-TRAIN_PATH = "C:/Users/Rushaniia/PycharmProjects/Sigmentation/input/stage1_train"
-TEST_PATH = "C:/Users/Rushaniia/PycharmProjects/Sigmentation/input/stage1_test"
+TRAIN_PATH = "input/stage1_train"
+TEST_PATH = "input/stage1_test"
 
 warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
 seed = 42
 random.seed = seed
 np.random.seed = seed
 # Get train and test IDs
-amount_train = len([name for name in os.listdir(TRAIN_PATH + '/images') if os.path.isfile(os.path.join(TRAIN_PATH+ '/images', name))])
-train_ids = list(range(1, amount_train))
-amount_test = len([name for name in os.listdir(TRAIN_PATH + '/images') if os.path.isfile(os.path.join(TRAIN_PATH+ '/images', name))])
-test_ids = list(range(1, amount_test))
+number_of_train_image = len([name for name in os.listdir(TRAIN_PATH + '/images') if os.path.isfile(os.path.join(TRAIN_PATH+ '/images', name))])
+train_ids = list(range(1, number_of_train_image))
+number_of_test_image = len([name for name in os.listdir(TEST_PATH + '/images') if os.path.isfile(os.path.join(TEST_PATH+ '/images', name))])
+test_ids = list(range(1, number_of_test_image))
 
 # Get and resize train images and masks
 images = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
@@ -46,6 +47,7 @@ for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
     img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
     shape1 = img.shape
     images[n] = img
+
     mask = np.zeros((IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
     for mask_file in next(os.walk(path + '/masks/'))[2]:
         mask_ = imread(path + '/masks/' + mask_file)
@@ -93,26 +95,33 @@ def deconv2d(input_tensor, filter_size, output_size, out_channels, in_channels, 
     return h1
 
 def conv2d(input_tensor, depth, kernel, name, strides=(1, 1), padding="SAME"):
+    tf.layers.batch_normalization(input_tensor, training=True)
     return tf.layers.conv2d(input_tensor, filters=depth, kernel_size=kernel, strides=strides, padding=padding, activation=tf.nn.relu, name=name)
 
 X = tf.placeholder(tf.float32, [None, 128, 128, 1])
 lr = tf.placeholder(tf.float32)
 
-net = conv2d(X, 32, 1, "Y0") #128
+conv1 = conv2d(X, 32, 1, "Y0") #128
 
-net = conv2d(net, 64, 3, "Y2", strides=(2, 2)) #64
+conv2 = conv2d(conv1, 64, 3, "Y2", strides=(2, 2)) #64
 
-net = conv2d(net, 128, 3,  "Y3", strides=(2, 2)) #32
+conv3 = conv2d(conv2, 128, 3,  "Y3", strides=(2, 2)) #32
 
 
-net = deconv2d(net, 1, 32, 128, 128, "Y2_deconv") # 32
-net = tf.nn.relu(net)
+deconv1 = deconv2d(conv3, 1, 32, 128, 128, "Y2_deconv") # 32
+#skip1 = tf.concat([deconv1, conv3], 0)
+#net = tf.nn.relu(skip1)
+net = tf.nn.relu(deconv1)
 
-net = deconv2d(net, 2, 64, 64, 128, "Y1_deconv", strides=[1, 2, 2, 1]) # 64
-net = tf.nn.relu(net)
+deconv2 = deconv2d(net, 2, 64, 64, 128, "Y1_deconv", strides=[1, 2, 2, 1]) # 64
+#skip2 = tf.concat([deconv2, conv2], 0)
+#net = tf.nn.relu(skip2)
+net = tf.nn.relu(deconv2)
 
-net = deconv2d(net, 2, 128, 32, 64, "Y0_deconv", strides=[1, 2, 2, 1]) # 128
-net = tf.nn.relu(net)
+deconv3 = deconv2d(net, 2, 128, 32, 64, "Y0_deconv", strides=[1, 2, 2, 1]) # 128
+#skip3 = tf.concat([deconv3, conv1], 0)
+#net = tf.nn.relu(skip3)
+net = tf.nn.relu(deconv3)
 
 logits = deconv2d(net, 1, 128, 1, 32, "logits_deconv") # 128
 
@@ -127,25 +136,28 @@ sess.run(init)
 
 batch_count = 0
 display_count = 1
-for i in range(10):
-    if (batch_count > 1):
+number_images = 10
+batch_size = 2
+number_steps = int(number_images/batch_size)
+for i in range(number_steps):
+    # training on batches of 2 images with 2 mask images
+    if (batch_count > 3):
         batch_count = 0
 
-    batch_X, batch_Y = next_batch(2, batch_count)
-    batch_X = batch_X.reshape(2, 128, 128, 1)
+    batch_X, batch_Y = next_batch(batch_size, batch_count)
+    batch_X = batch_X.reshape(batch_size, 128, 128, 1)
     batch_count += 1
 
-    feed_dict = {X: batch_X, Y_: batch_Y, lr: 0.0005}
+    feed_dict = {X: batch_X, Y_: batch_Y, lr: 0.001}
     loss_value, _ = sess.run([loss, optimizer], feed_dict=feed_dict)
-
     if (i % 500 == 0):
         print(str(display_count) + " training loss:", str(loss_value))
         display_count += 1
 
 print("Done!")
 
-random_id = 11 
-test_image = X_test[random_id].astype(float)
+ix = 4 #random
+test_image = X_test[ix].astype(float)
 imshow(test_image)
 plt.show()
 
@@ -157,7 +169,6 @@ test_image = np.reshape(test_image, [-1, 128 , 128, 1])
 test_data = {X:test_image}
 
 test_mask = sess.run([logits],feed_dict=test_data)
-
 
 test_mask = np.reshape(np.squeeze(test_mask), [IMG_WIDTH , IMG_WIDTH, 1])
 
